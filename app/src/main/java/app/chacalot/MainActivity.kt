@@ -21,7 +21,9 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
+import android.util.LruCache
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.HorizontalScrollView
 import android.widget.BaseAdapter
 import android.widget.LinearLayout
@@ -58,6 +60,7 @@ class MainActivity : Activity() {
     private val marked = ArrayList<Entry>()
     private val history = ArrayList<Entry>()
     private var scanId = 0
+    private val thumbCache = LruCache<String, Bitmap>(120)
 
     private val tick = object : Runnable {
         override fun run() {
@@ -255,14 +258,29 @@ class MainActivity : Activity() {
                 override fun getItemId(i: Int) = i.toLong()
                 override fun getView(i: Int, v: View?, parent: ViewGroup): View {
                     val e = rows[i]
-                    val tv = Ds.label(this@MainActivity, 14f).apply {
-                        text = "${e.file.name}\n${e.file.parent.orEmpty()}\n${Formatter.formatFileSize(this@MainActivity, e.size)}"
+                    val ctx = this@MainActivity
+                    val tv = Ds.label(ctx, 14f).apply {
+                        text = "${e.file.name}\n${e.file.parent.orEmpty()}\n${Formatter.formatFileSize(ctx, e.size)}"
+                        maxLines = 4
+                    }
+                    val img = ImageView(ctx).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(Ds.BG) }
+                    if (e.kind == Kind.IMAGE || e.kind == Kind.VIDEO) {
+                        val path = e.file.path
+                        thumbCache.get(path)?.let(img::setImageBitmap) ?: Thread {
+                            thumbnail(e, 160)?.let { b -> thumbCache.put(path, b); runOnUiThread { img.setImageBitmap(b) } }
+                        }.start()
+                    } else {
+                        img.scaleType = ImageView.ScaleType.CENTER
+                        img.setImageDrawable(PageIconDrawable(dp(3).toFloat()))
+                    }
+                    val panel = LinearLayout(ctx).apply {
+                        gravity = Gravity.CENTER_VERTICAL
                         background = PanelDrawable(dp(2).toFloat())
-                        setPadding(dp(12), dp(10), dp(12), dp(10))
+                        setPadding(dp(10), dp(10), dp(12), dp(10))
+                        addView(img, LinearLayout.LayoutParams(dp(64), dp(64)))
+                        addView(tv, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(12) })
                     }
-                    return FrameLayout(this@MainActivity).apply {
-                        setPadding(dp(10), dp(4), dp(10), dp(4)); addView(tv)
-                    }
+                    return FrameLayout(ctx).apply { setPadding(dp(10), dp(4), dp(10), dp(4)); addView(panel) }
                 }
             }
             setOnItemClickListener { _, _, i, _ ->
@@ -283,13 +301,14 @@ class MainActivity : Activity() {
             .show()
     }
 
-    private fun thumbnail(e: Entry): Bitmap? = try {
+    private fun thumbnail(e: Entry, max: Int = 1024): Bitmap? = try {
         if (e.kind == Kind.VIDEO) {
             MediaMetadataRetriever().run { try { setDataSource(e.file.path); getFrameAtTime(0) } finally { release() } }
+                ?.let { f -> val k = maxOf(f.width, f.height) / max; if (k > 1) Bitmap.createScaledBitmap(f, f.width / k, f.height / k, true) else f }
         } else {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(e.file.path, bounds)
-            val opts = BitmapFactory.Options().apply { inSampleSize = maxOf(1, maxOf(bounds.outWidth, bounds.outHeight) / 1024) }
+            val opts = BitmapFactory.Options().apply { inSampleSize = maxOf(1, maxOf(bounds.outWidth, bounds.outHeight) / max) }
             BitmapFactory.decodeFile(e.file.path, opts)
         }
     } catch (ex: Exception) { null }
