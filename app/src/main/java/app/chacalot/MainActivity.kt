@@ -90,6 +90,7 @@ private fun Cleaner() {
                 Filter.entries.forEach { FilterChip(filter == it, { filter = it }, { Text(it.label) }) }
             }
             Sort.entries.forEach { FilterChip(sort == it, { sort = it }, { Text(it.label) }) }
+            UpdateButton()
         }
         Box(Modifier.weight(1f).fillMaxWidth().padding(vertical = 16.dp), Alignment.Center) {
             val item = deck?.drop(index)?.firstOrNull { it !in marked }

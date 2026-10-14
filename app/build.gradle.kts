@@ -10,10 +10,18 @@ android {
         applicationId = "app.chacalot"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // CI run number = version code, so every build is newer than the last.
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
+        versionName = "1.$versionCode"
     }
-    buildFeatures { compose = true }
+    // Committed on purpose (personal app): one stable key lets updates install over the old APK.
+    signingConfigs.getByName("debug") {
+        storeFile = file("chacalot.jks")
+        storePassword = "chacalot"
+        keyAlias = "chacalot"
+        keyPassword = "chacalot"
+    }
+    buildFeatures { compose = true; buildConfig = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
     kotlinOptions { jvmTarget = "17" }
     compileOptions {
