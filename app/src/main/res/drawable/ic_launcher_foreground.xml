@@ -4,14 +4,19 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- board -->
-    <path android:fillColor="#4F6B7A" android:pathData="M30,26h48v60h-48z" />
-    <!-- paper -->
-    <path android:fillColor="#FFFFFF" android:pathData="M36,36h36v44h-36z" />
-    <!-- clip -->
-    <path android:fillColor="#3A3F45" android:pathData="M44,20h20v14h-20z" />
-    <!-- text lines -->
-    <path android:fillColor="#8A9096" android:pathData="M42,46h24v4h-24z" />
-    <path android:fillColor="#8A9096" android:pathData="M42,56h24v4h-24z" />
-    <path android:fillColor="#8A9096" android:pathData="M42,66h16v4h-16z" />
+    <!-- selection brackets (the "cursor" from the app's cards) -->
+    <path android:fillColor="#3E6DB0" android:pathData="M28,20h10v3h-7v7h-3z" />
+    <path android:fillColor="#3E6DB0" android:pathData="M80,20h-10v3h7v7h3z" />
+    <path android:fillColor="#3E6DB0" android:pathData="M80,88h-10v-3h7v-7h3z" />
+    <path android:fillColor="#3E6DB0" android:pathData="M28,88h10v-3h-7v-7h-3z" />
+    <!-- tilted card mid-swipe -->
+    <group android:rotation="-8" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#4A4F55" android:pathData="M41,30h26l4,4v40l-4,4h-26l-4,-4v-40z" />
+        <path android:fillColor="#FFFFFF" android:pathData="M43,33h22l2,2v38l-2,2h-22l-2,-2v-38z" />
+        <path android:fillColor="#E1E4E7" android:pathData="M44,37h20v16h-20z" />
+        <path android:fillColor="#8A9096" android:pathData="M44,53l7,-9l4,5l3,-3l6,7z" />
+        <path android:fillColor="#3E6DB0" android:pathData="M58,39h4v4h-4z" />
+        <path android:fillColor="#8A9096" android:pathData="M44,58h20v3h-20z" />
+        <path android:fillColor="#8A9096" android:pathData="M44,65h14v3h-14z" />
+    </group>
 </vector>
