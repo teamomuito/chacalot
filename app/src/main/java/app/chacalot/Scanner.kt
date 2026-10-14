@@ -26,9 +26,9 @@ private fun kindOf(f: File) = when (f.extension.lowercase()) {
     else -> Kind.OTHER
 }
 
-/** Every file on shared storage except Android/ (other apps' private data). */
+/** Every file on shared storage except Android/data and Android/obb (blocked by Android; Android/media is readable). */
 fun scanFiles(): List<Entry> = root().walkTopDown()
-    .onEnter { !(it.parentFile == root() && it.name == "Android") }
+    .onEnter { it.parentFile?.name != "Android" || it.name == "media" }
     .filter { it.isFile }
     .map { Entry(it, it.length(), it.lastModified(), kindOf(it)) }
     .toList()
