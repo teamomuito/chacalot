@@ -133,11 +133,11 @@ class MainActivity : Activity() {
             setBackgroundColor(Ds.BAR)
             setPadding(dp(10), dp(8), dp(10), dp(8))
         }
-        fun button(letter: String, label: String, onClick: () -> Unit, first: Boolean = false) =
-            DsButton(this, letter, label).apply { setOnClickListener { onClick() } }.also {
-                bottomBar.addView(it, LinearLayout.LayoutParams(0, -2, 1f).apply { if (!first) marginStart = dp(10) })
-            }
-        button("B", "Delete", ::confirmDelete, first = true)
+        fun button(letter: String, label: String, onClick: () -> Unit) {
+            val lp = LinearLayout.LayoutParams(0, -2, 1f).apply { if (bottomBar.childCount > 0) marginStart = dp(10) }
+            bottomBar.addView(DsButton(this, letter, label).apply { setOnClickListener { onClick() } }, lp)
+        }
+        button("B", "Delete", ::confirmDelete)
         button("A", "Undo", ::undo)
         button("X", "Update") { checkForUpdate(this, ::flash) }
         root.addView(bottomBar, LinearLayout.LayoutParams(-1, -2))
