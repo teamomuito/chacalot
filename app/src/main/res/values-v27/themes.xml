@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.Chacalot" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/ds_icon_bg</item>
+        <item name="android:statusBarColor">@color/ds_topbar</item>
+        <item name="android:navigationBarColor">@color/ds_bottombar</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

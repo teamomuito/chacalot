@@ -1,168 +1,271 @@
 package app.chacalot
 
+import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.text.format.DateFormat
 import android.text.format.Formatter
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.animation.core.Animatable
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.unit.dp
-import coil.ImageLoader
-import coil.compose.AsyncImage
-import coil.decode.VideoFrameDecoder
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowInsets
+import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
+import android.widget.LinearLayout
+import android.widget.TextView
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-class MainActivity : ComponentActivity() {
-    private var granted by mutableStateOf(false)
+private enum class Mode(val label: String) { FILES("Files"), LEFTOVERS("Leftovers") }
+private enum class Filter(val label: String, val ok: (Entry) -> Boolean) {
+    ALL("All", { true }), PICS("Pics", { it.kind == Kind.IMAGE }),
+    VIDEOS("Videos", { it.kind == Kind.VIDEO }), OTHER("Other", { it.kind == Kind.OTHER }),
+}
+
+class MainActivity : Activity() {
+    private lateinit var clock: TextView
+    private lateinit var prompt: TextView
+    private lateinit var count: TextView
+    private lateinit var chips: LinearLayout
+    private lateinit var stage: FrameLayout
+    private lateinit var message: TextView
+    private lateinit var topBar: LinearLayout
+    private lateinit var bottomBar: LinearLayout
+
+    private val handler = Handler(Looper.getMainLooper())
+    private var mode = Mode.FILES
+    private var filter = Filter.ALL
+    private var sort = Sort.BIGGEST
+    private var all: List<Entry>? = null
+    private val seen = HashSet<Entry>()
+    private val marked = ArrayList<Entry>()
+    private val history = ArrayList<Entry>()
+    private var scanId = 0
+
+    private val tick = object : Runnable {
+        override fun run() {
+            clock.text = SimpleDateFormat("HH:mm  MM/dd", Locale.getDefault()).format(Date())
+            handler.postDelayed(this, 10_000)
+        }
+    }
+    private val resetPrompt = Runnable { prompt.text = PROMPT }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { MaterialTheme { Surface(Modifier.fillMaxSize()) { if (granted) Cleaner() else Gate() } } }
+        Ds.init(this)
+        setContentView(buildUi())
+        rebuildChips()
     }
 
     override fun onResume() {
         super.onResume()
-        granted = Environment.isExternalStorageManager()
+        handler.post(tick)
+        if (all == null && Environment.isExternalStorageManager()) scan() else render()
     }
 
-    @Composable
-    private fun Gate() = Column(Modifier.fillMaxSize().padding(24.dp), Arrangement.Center, Alignment.CenterHorizontally) {
-        Text("Chacalot needs all-files access to find things to clean.")
-        Spacer(Modifier.height(16.dp))
-        Button({
-            startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
-        }) { Text("Grant access") }
+    override fun onPause() {
+        handler.removeCallbacks(tick)
+        super.onPause()
     }
-}
 
-private enum class Mode(val label: String) { FILES("Files"), LEFTOVERS("Leftovers") }
-private enum class Filter(val label: String, val ok: (Entry) -> Boolean) {
-    ALL("All", { true }), IMAGES("Pics", { it.kind == Kind.IMAGE }),
-    VIDEOS("Videos", { it.kind == Kind.VIDEO }), OTHER("Other", { it.kind == Kind.OTHER }),
-}
+    // ---- UI (same building blocks as Pictoclip: Ds, PanelDrawable, DsButton) ---------------------
 
-@Composable
-private fun Cleaner() {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val loader = remember { ImageLoader.Builder(ctx).components { add(VideoFrameDecoder.Factory()) }.build() }
-    var mode by remember { mutableStateOf(Mode.FILES) }
-    var filter by remember { mutableStateOf(Filter.ALL) }
-    var sort by remember { mutableStateOf(Sort.BIGGEST) }
-    var all by remember { mutableStateOf<List<Entry>?>(null) }
-    var index by remember { mutableIntStateOf(0) }
-    val marked = remember { mutableStateListOf<Entry>() }
-    var confirm by remember { mutableStateOf(false) }
-
-    LaunchedEffect(mode) {
-        all = null; index = 0; marked.clear()
-        all = withContext(Dispatchers.IO) { if (mode == Mode.FILES) scanFiles() else scanLeftovers(ctx) }
-    }
-    val deck = remember(all, filter, sort, mode) {
-        all?.filter { mode == Mode.LEFTOVERS || filter.ok(it) }?.sortedWith(sort.cmp)
-    }
-    // Re-sorting/filtering restarts the deck; marks are kept.
-    LaunchedEffect(deck) { index = 0 }
-    val pending = deck?.filter { it !in marked }
-
-    Column(Modifier.fillMaxSize().padding(16.dp).statusBarsPadding()) {
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Mode.entries.forEach { FilterChip(mode == it, { mode = it }, { Text(it.label) }) }
-            if (mode == Mode.FILES) {
-                Filter.entries.forEach { FilterChip(filter == it, { filter = it }, { Text(it.label) }) }
-            }
-            Sort.entries.forEach { FilterChip(sort == it, { sort = it }, { Text(it.label) }) }
-            UpdateButton()
+    private fun buildUi(): View {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = Ds.gridBackground(this@MainActivity)
         }
-        Box(Modifier.weight(1f).fillMaxWidth().padding(vertical = 16.dp), Alignment.Center) {
-            val item = deck?.drop(index)?.firstOrNull { it !in marked }
-            when {
-                deck == null -> CircularProgressIndicator()
-                item == null -> Text(if (deck.isEmpty()) "Nothing found." else "Deck finished.")
-                else -> key(item) {
-                    Card(item, loader) { delete ->
-                        if (delete) marked += item
-                        index = deck.indexOf(item) + 1
-                    }
+        topBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(Ds.TOP_LIGHT, Ds.TOP_DARK))
+            minimumHeight = dp(32)
+            setPadding(dp(10), 0, dp(10), 0)
+        }
+        topBar.addView(
+            Ds.label(this, 14f, Color.WHITE).apply { text = "CHACALOT" },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        clock = Ds.label(this, 14f, Color.WHITE)
+        topBar.addView(clock)
+        root.addView(topBar, LinearLayout.LayoutParams(-1, -2))
+
+        val promptPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = PanelDrawable(dp(2).toFloat())
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+        }
+        prompt = Ds.label(this, 15f).apply { text = PROMPT }
+        promptPanel.addView(prompt, LinearLayout.LayoutParams(0, -2, 1f))
+        count = Ds.label(this, 13f, Ds.SUBTLE)
+        promptPanel.addView(count)
+        root.addView(promptPanel, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(10), dp(10), dp(10), dp(4)) })
+
+        chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val chipScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) }
+        root.addView(chipScroll, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(10), dp(4), dp(10), dp(4)) })
+
+        stage = FrameLayout(this)
+        message = Ds.label(this, 15f, Ds.SUBTLE).apply {
+            gravity = Gravity.CENTER
+            setLineSpacing(0f, 1.2f)
+            background = PanelDrawable(dp(2).toFloat(), Ds.BG)
+            setPadding(dp(16), dp(24), dp(16), dp(24))
+        }
+        root.addView(stage, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        bottomBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Ds.BAR)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+        }
+        fun button(letter: String, label: String, onClick: () -> Unit, first: Boolean = false) =
+            DsButton(this, letter, label).apply { setOnClickListener { onClick() } }.also {
+                bottomBar.addView(it, LinearLayout.LayoutParams(0, -2, 1f).apply { if (!first) marginStart = dp(10) })
+            }
+        button("B", "Delete", ::confirmDelete, first = true)
+        button("A", "Undo", ::undo)
+        button("X", "Update") { checkForUpdate(this, ::flash) }
+        root.addView(bottomBar, LinearLayout.LayoutParams(-1, -2))
+
+        root.setOnApplyWindowInsetsListener { _, insets ->
+            val l: Int; val t: Int; val r: Int; val b: Int
+            if (Build.VERSION.SDK_INT >= 30) {
+                val bars = insets.getInsets(WindowInsets.Type.systemBars())
+                l = bars.left; t = bars.top; r = bars.right; b = bars.bottom
+            } else {
+                @Suppress("DEPRECATION")
+                run {
+                    l = insets.systemWindowInsetLeft; t = insets.systemWindowInsetTop
+                    r = insets.systemWindowInsetRight; b = insets.systemWindowInsetBottom
                 }
             }
+            topBar.minimumHeight = dp(32) + t
+            topBar.setPadding(dp(10) + l, t, dp(10) + r, 0)
+            bottomBar.setPadding(dp(10) + l, dp(8), dp(10) + r, dp(8) + b)
+            insets
         }
-        Text("← delete   ·   keep →", Modifier.align(Alignment.CenterHorizontally))
-        Button({ confirm = true }, Modifier.fillMaxWidth(), enabled = marked.isNotEmpty()) {
-            Text("Delete ${marked.size} (${Formatter.formatFileSize(ctx, marked.sumOf { it.size })})")
-        }
+        return root
     }
 
-    if (confirm) AlertDialog(
-        onDismissRequest = { confirm = false },
-        title = { Text("Delete ${marked.size} items?") },
-        text = { Text("This permanently removes them. It cannot be undone.") },
-        confirmButton = {
-            TextButton({
-                confirm = false
+    private fun rebuildChips() {
+        chips.removeAllViews()
+        fun chip(label: String, active: Boolean, onClick: () -> Unit) =
+            chips.addView(Chip(this, label, active).apply { setOnClickListener { onClick() } },
+                LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(6) })
+        Mode.entries.forEach { m -> chip(m.label, mode == m) { mode = m; rebuildChips(); scan() } }
+        if (mode == Mode.FILES) Filter.entries.forEach { f -> chip(f.label, filter == f) { filter = f; rebuildChips(); render() } }
+        Sort.entries.forEach { s -> chip(s.label, sort == s) { sort = s; rebuildChips(); render() } }
+    }
+
+    // ---- actions -------------------------------------------------------------------------------
+
+    private fun flash(msg: String) {
+        handler.removeCallbacks(resetPrompt)
+        prompt.text = msg
+        handler.postDelayed(resetPrompt, 1500)
+    }
+
+    private fun scan() {
+        val id = ++scanId
+        all = null; seen.clear(); marked.clear(); history.clear()
+        showMessage("Scanning...")
+        Thread {
+            val result = if (mode == Mode.FILES) scanFiles() else scanLeftovers(this)
+            runOnUiThread { if (id == scanId) { all = result; render() } }
+        }.start()
+    }
+
+    private fun showMessage(text: String, onClick: (() -> Unit)? = null) {
+        stage.removeAllViews()
+        message.text = text
+        message.setOnClickListener(onClick?.let { c -> View.OnClickListener { c() } })
+        (message.parent as? ViewGroup)?.removeView(message)
+        stage.addView(message, FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply { setMargins(dp(10), dp(10), dp(10), 0) })
+    }
+
+    private fun render() {
+        count.text = if (marked.isEmpty()) "" else "${marked.size} / ${Formatter.formatFileSize(this, marked.sumOf { it.size })}"
+        if (!Environment.isExternalStorageManager()) {
+            showMessage("Chacalot needs all-files access.\nTap here to allow.") {
+                startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
+            }
+            return
+        }
+        val list = all ?: return
+        val item = list.filter { mode == Mode.LEFTOVERS || filter.ok(it) }.sortedWith(sort.cmp).firstOrNull { it !in seen }
+        if (item == null) {
+            showMessage(if (seen.isEmpty()) "Nothing found." else "Deck finished!\nPress B to delete the marked ones.")
+            return
+        }
+        stage.removeAllViews()
+        val card = FileCard(this) { delete ->
+            seen += item; history += item
+            if (delete) marked += item
+            render()
+        }
+        card.bind(item.file.name, item.file.parent.orEmpty(),
+            "${Formatter.formatFileSize(this, item.size)}  ${DateFormat.format("yyyy-MM-dd", item.modified)}", item.note)
+        stage.addView(card, FrameLayout.LayoutParams(-1, -1).apply { setMargins(0, dp(6), 0, dp(6)) })
+        if (item.kind == Kind.FOLDER || item.kind == Kind.OTHER) card.thumb.setImageDrawable(PageIconDrawable(dp(10).toFloat()))
+        else Thread {
+            val bmp = thumbnail(item)
+            runOnUiThread { if (card.isAttachedToWindow) card.thumb.setImageBitmap(bmp) }
+        }.start()
+    }
+
+    private fun thumbnail(e: Entry): Bitmap? = try {
+        if (e.kind == Kind.VIDEO) {
+            MediaMetadataRetriever().run { try { setDataSource(e.file.path); getFrameAtTime(0) } finally { release() } }
+        } else {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(e.file.path, bounds)
+            val opts = BitmapFactory.Options().apply { inSampleSize = maxOf(1, maxOf(bounds.outWidth, bounds.outHeight) / 1024) }
+            BitmapFactory.decodeFile(e.file.path, opts)
+        }
+    } catch (ex: Exception) { null }
+
+    private fun undo() {
+        val last = history.removeLastOrNull() ?: return flash("Nothing to undo!")
+        seen -= last; marked -= last
+        render()
+    }
+
+    private fun confirmDelete() {
+        if (marked.isEmpty()) return flash("Swipe left first!")
+        AlertDialog.Builder(this)
+            .setMessage("Permanently delete ${marked.size} items?")
+            .setPositiveButton("Yes") { _, _ ->
                 val doomed = marked.toList()
-                scope.launch {
-                    val gone = withContext(Dispatchers.IO) { doomed.filter { it.file.deleteRecursively() } }
-                    all = all?.filter { it !in gone }
-                    marked.removeAll(gone.toSet())
-                }
-            }) { Text("Delete") }
-        },
-        dismissButton = { TextButton({ confirm = false }) { Text("Cancel") } },
-    )
-}
+                Thread {
+                    val gone = doomed.filter { it.file.deleteRecursively() }.toSet()
+                    runOnUiThread {
+                        all = all?.filter { it !in gone }
+                        marked.removeAll(gone); seen.removeAll(gone); history.removeAll(gone)
+                        render()
+                        flash("Deleted!")
+                    }
+                }.start()
+            }
+            .setNegativeButton("No", null)
+            .show()
+    }
 
-@Composable
-private fun Card(e: Entry, loader: ImageLoader, onSwiped: (delete: Boolean) -> Unit) {
-    val ctx = LocalContext.current
-    val x = remember { Animatable(0f) }
-    val scope = rememberCoroutineScope()
-    ElevatedCard(
-        Modifier.fillMaxWidth().fillMaxHeight(0.9f)
-            .graphicsLayer { translationX = x.value; rotationZ = x.value / 40f }
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragEnd = {
-                        val w = size.width
-                        scope.launch {
-                            when {
-                                x.value < -w / 3 -> { x.animateTo(-w * 1.5f); onSwiped(true) }
-                                x.value > w / 3 -> { x.animateTo(w * 1.5f); onSwiped(false) }
-                                else -> x.animateTo(0f)
-                            }
-                        }
-                    },
-                ) { change, drag -> change.consume(); scope.launch { x.snapTo(x.value + drag.x) } }
-            },
-    ) {
-        Box(Modifier.weight(1f).fillMaxWidth(), Alignment.Center) {
-            if (e.kind == Kind.IMAGE || e.kind == Kind.VIDEO) {
-                AsyncImage(e.file, e.file.name, loader, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-            } else Text(if (e.kind == Kind.FOLDER) "📁" else "📄", style = MaterialTheme.typography.displayLarge)
-        }
-        Column(Modifier.padding(16.dp)) {
-            Text(e.file.name, style = MaterialTheme.typography.titleMedium)
-            Text(e.file.parent.orEmpty(), style = MaterialTheme.typography.bodySmall)
-            Text("${Formatter.formatFileSize(ctx, e.size)} · ${DateFormat.format("yyyy-MM-dd", e.modified)}")
-            if (e.note.isNotEmpty()) Text(e.note, color = MaterialTheme.colorScheme.error)
-        }
+    private companion object {
+        const val PROMPT = "Swipe left to delete, right to keep."
     }
 }

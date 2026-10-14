@@ -1,0 +1,5 @@
+<resources>
+    <color name="ds_topbar">#4F6B7A</color>
+    <color name="ds_bottombar">#E3E6E9</color>
+    <color name="ds_icon_bg">#E9ECEF</color>
+</resources>
