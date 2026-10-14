@@ -247,7 +247,7 @@ class MainActivity : Activity() {
         val rows = list.sortedWith(sort.cmp)
         stage.removeAllViews()
         stage.addView(ListView(this).apply {
-            divider = null; dividerHeight = 0; selector = null
+            divider = null; dividerHeight = 0; setSelector(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
             setBackgroundColor(Color.TRANSPARENT)
             adapter = object : BaseAdapter() {
                 override fun getCount() = rows.size
