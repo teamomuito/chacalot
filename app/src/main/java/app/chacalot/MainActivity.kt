@@ -23,13 +23,16 @@ import android.view.ViewGroup
 import android.view.WindowInsets
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
+import android.widget.BaseAdapter
 import android.widget.LinearLayout
+import android.widget.ListView
 import android.widget.TextView
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private enum class Mode(val label: String) { FILES("Files"), LEFTOVERS("Leftovers") }
+private enum class Mode(val label: String) { FILES("Files"), LEFTOVERS("Leftovers"), KEPT("Kept") }
 private enum class Filter(val label: String, val ok: (Entry) -> Boolean) {
     ALL("All", { true }), PICS("Pics", { it.kind == Kind.IMAGE }),
     VIDEOS("Videos", { it.kind == Kind.VIDEO }), OTHER("Other", { it.kind == Kind.OTHER }),
@@ -44,6 +47,7 @@ class MainActivity : Activity() {
     private lateinit var message: TextView
     private lateinit var topBar: LinearLayout
     private lateinit var bottomBar: LinearLayout
+    private lateinit var deleteBtn: DsButton
 
     private val handler = Handler(Looper.getMainLooper())
     private var mode = Mode.FILES
@@ -133,11 +137,11 @@ class MainActivity : Activity() {
             setBackgroundColor(Ds.BAR)
             setPadding(dp(10), dp(8), dp(10), dp(8))
         }
-        fun button(letter: String, label: String, onClick: () -> Unit) {
+        fun button(letter: String, label: String, onClick: () -> Unit): DsButton {
             val lp = LinearLayout.LayoutParams(0, -2, 1f).apply { if (bottomBar.childCount > 0) marginStart = dp(10) }
-            bottomBar.addView(DsButton(this, letter, label).apply { setOnClickListener { onClick() } }, lp)
+            return DsButton(this, letter, label).apply { setOnClickListener { onClick() } }.also { bottomBar.addView(it, lp) }
         }
-        button("B", "Delete", ::confirmDelete)
+        deleteBtn = button("B", "Delete") { if (mode == Mode.KEPT) confirmReset() else confirmDelete() }
         button("A", "Undo", ::undo)
         button("X", "Update") { checkForUpdate(this, ::flash) }
         root.addView(bottomBar, LinearLayout.LayoutParams(-1, -2))
@@ -164,6 +168,7 @@ class MainActivity : Activity() {
 
     private fun rebuildChips() {
         chips.removeAllViews()
+        deleteBtn.text = if (mode == Mode.KEPT) "Reset" else "Delete"
         fun chip(label: String, active: Boolean, onClick: () -> Unit) =
             chips.addView(Chip(this, label, active).apply { setOnClickListener { onClick() } },
                 LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(6) })
@@ -185,7 +190,12 @@ class MainActivity : Activity() {
         all = null; seen.clear(); marked.clear(); history.clear()
         showMessage("Scanning...")
         Thread {
-            val result = if (mode == Mode.FILES) scanFiles() else scanLeftovers(this)
+            val kept = Kept.all(this)
+            val result = when (mode) {
+                Mode.FILES -> scanFiles().filter { it.file.path !in kept }
+                Mode.LEFTOVERS -> scanLeftovers(this).filter { it.file.path !in kept }
+                Mode.KEPT -> kept.map(::File).filter { it.exists() }.map(::entryOf)
+            }
             runOnUiThread { if (id == scanId) { all = result; render() } }
         }.start()
     }
@@ -207,15 +217,17 @@ class MainActivity : Activity() {
             return
         }
         val list = all ?: return
+        if (mode == Mode.KEPT) return renderKept(list)
         val item = list.filter { mode == Mode.LEFTOVERS || filter.ok(it) }.sortedWith(sort.cmp).firstOrNull { it !in seen }
         if (item == null) {
             showMessage(if (seen.isEmpty()) "Nothing found." else "Deck finished!\nPress B to delete the marked ones.")
             return
         }
         stage.removeAllViews()
-        val card = FileCard(this) { delete ->
+        val card = FileCard(this) { swipe ->
             seen += item; history += item
-            if (delete) marked += item
+            if (swipe == Swipe.DELETE) marked += item
+            if (swipe == Swipe.KEEP) { Kept.add(this, item.file.path); flash("Kept forever!") }
             render()
         }
         card.bind(item.file.name, item.file.parent.orEmpty(),
@@ -226,6 +238,49 @@ class MainActivity : Activity() {
             val bmp = thumbnail(item)
             runOnUiThread { if (card.isAttachedToWindow) card.thumb.setImageBitmap(bmp) }
         }.start()
+    }
+
+    /** Kept tab: tap a row to make that file swipeable again. */
+    private fun renderKept(list: List<Entry>) {
+        count.text = "${list.size}"
+        if (list.isEmpty()) return showMessage("Nothing kept yet.\nSwipe a card up to keep it forever.")
+        val rows = list.sortedWith(sort.cmp)
+        stage.removeAllViews()
+        stage.addView(ListView(this).apply {
+            divider = null; dividerHeight = 0; selector = null
+            setBackgroundColor(Color.TRANSPARENT)
+            adapter = object : BaseAdapter() {
+                override fun getCount() = rows.size
+                override fun getItem(i: Int) = rows[i]
+                override fun getItemId(i: Int) = i.toLong()
+                override fun getView(i: Int, v: View?, parent: ViewGroup): View {
+                    val e = rows[i]
+                    val tv = Ds.label(this@MainActivity, 14f).apply {
+                        text = "${e.file.name}\n${e.file.parent.orEmpty()}\n${Formatter.formatFileSize(this@MainActivity, e.size)}"
+                        background = PanelDrawable(dp(2).toFloat())
+                        setPadding(dp(12), dp(10), dp(12), dp(10))
+                    }
+                    return FrameLayout(this@MainActivity).apply {
+                        setPadding(dp(10), dp(4), dp(10), dp(4)); addView(tv)
+                    }
+                }
+            }
+            setOnItemClickListener { _, _, i, _ ->
+                Kept.remove(this@MainActivity, rows[i].file.path)
+                all = all?.filter { it != rows[i] }
+                flash("Swipeable again!")
+                render()
+            }
+        })
+    }
+
+    private fun confirmReset() {
+        if (all.isNullOrEmpty()) return
+        AlertDialog.Builder(this)
+            .setMessage("Make all kept files swipeable again?")
+            .setPositiveButton("Yes") { _, _ -> Kept.clear(this); all = emptyList(); render(); flash("All restored!") }
+            .setNegativeButton("No", null)
+            .show()
     }
 
     private fun thumbnail(e: Entry): Bitmap? = try {
@@ -241,7 +296,7 @@ class MainActivity : Activity() {
 
     private fun undo() {
         val last = history.removeLastOrNull() ?: return flash("Nothing to undo!")
-        seen -= last; marked -= last
+        seen -= last; marked -= last; Kept.remove(this, last.file.path)
         render()
     }
 
@@ -266,6 +321,6 @@ class MainActivity : Activity() {
     }
 
     private companion object {
-        const val PROMPT = "Swipe left to delete, right to keep."
+        const val PROMPT = "Left: delete. Right: skip. Up: keep forever."
     }
 }

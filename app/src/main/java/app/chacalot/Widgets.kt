@@ -14,6 +14,8 @@ import android.widget.TextView
 import kotlin.math.abs
 
 
+enum class Swipe { DELETE, SKIP, KEEP }
+
 /** Toggle chip: a small DS panel; the active one is tinted and blue. */
 class Chip(context: Context, label: String, active: Boolean) : TextView(context) {
     init {
@@ -28,7 +30,7 @@ class Chip(context: Context, label: String, active: Boolean) : TextView(context)
 }
 
 /** The swipeable card: thumbnail, name, path, size/date pill, blue corner brackets like a selected clip. */
-class FileCard(context: Context, private val onSwipe: (delete: Boolean) -> Unit) : FrameLayout(context) {
+class FileCard(context: Context, private val onSwipe: (Swipe) -> Unit) : FrameLayout(context) {
     val thumb = ImageView(context).apply {
         scaleType = ImageView.ScaleType.FIT_CENTER
         setBackgroundColor(Ds.BG)
@@ -46,6 +48,7 @@ class FileCard(context: Context, private val onSwipe: (delete: Boolean) -> Unit)
         strokeWidth = context.dp(3).toFloat()
     }
     private var downX = 0f
+    private var downY = 0f
 
     init {
         setWillNotDraw(false)
@@ -78,18 +81,24 @@ class FileCard(context: Context, private val onSwipe: (delete: Boolean) -> Unit)
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> downX = e.rawX - translationX
+            MotionEvent.ACTION_DOWN -> { downX = e.rawX - translationX; downY = e.rawY }
             MotionEvent.ACTION_MOVE -> {
                 translationX = e.rawX - downX
+                translationY = minOf(0f, e.rawY - downY)
                 rotation = translationX / 40f
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 val limit = width / 3f
-                if (abs(translationX) > limit) {
-                    val left = translationX < 0
-                    animate().translationX(if (left) -width * 1.5f else width * 1.5f).setDuration(150)
-                        .withEndAction { onSwipe(left) }.start()
-                } else animate().translationX(0f).rotation(0f).setDuration(120).start()
+                when {
+                    abs(translationX) > limit -> {
+                        val left = translationX < 0
+                        animate().translationX(if (left) -width * 1.5f else width * 1.5f).setDuration(150)
+                            .withEndAction { onSwipe(if (left) Swipe.DELETE else Swipe.SKIP) }.start()
+                    }
+                    -translationY > height / 4f ->
+                        animate().translationY(-height * 1.5f).setDuration(150).withEndAction { onSwipe(Swipe.KEEP) }.start()
+                    else -> animate().translationX(0f).translationY(0f).rotation(0f).setDuration(120).start()
+                }
             }
         }
         return true

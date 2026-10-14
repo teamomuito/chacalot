@@ -20,7 +20,7 @@ private val VIDEOS = setOf("mp4", "mkv", "mov", "webm", "3gp", "avi")
 
 fun root(): File = Environment.getExternalStorageDirectory()
 
-private fun kindOf(f: File) = when (f.extension.lowercase()) {
+fun kindOf(f: File) = when (f.extension.lowercase()) {
     in IMAGES -> Kind.IMAGE
     in VIDEOS -> Kind.VIDEO
     else -> Kind.OTHER
@@ -51,4 +51,16 @@ fun scanLeftovers(ctx: Context): List<Entry> {
     }
     emptyDirs(root())
     return out
+}
+
+fun entryOf(f: File) = Entry(f, if (f.isFile) f.length() else 0, f.lastModified(), if (f.isDirectory) Kind.FOLDER else kindOf(f))
+
+/** Paths the user swiped up on: never shown in a deck until restored from the Kept tab. */
+object Kept {
+    private fun prefs(ctx: Context) = ctx.getSharedPreferences("kept", Context.MODE_PRIVATE)
+    fun all(ctx: Context): Set<String> = prefs(ctx).getStringSet("paths", emptySet())!!
+    private fun save(ctx: Context, s: Set<String>) = prefs(ctx).edit().putStringSet("paths", s).apply()
+    fun add(ctx: Context, path: String) = save(ctx, all(ctx) + path)
+    fun remove(ctx: Context, path: String) = save(ctx, all(ctx) - path)
+    fun clear(ctx: Context) = save(ctx, emptySet())
 }
