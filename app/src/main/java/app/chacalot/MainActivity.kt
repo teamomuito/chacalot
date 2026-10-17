@@ -178,6 +178,10 @@ class MainActivity : Activity() {
         Mode.entries.forEach { m -> chip(m.label, mode == m) { mode = m; rebuildChips(); scan() } }
         if (mode == Mode.FILES) Filter.entries.forEach { f -> chip(f.label, filter == f) { filter = f; rebuildChips(); render() } }
         Sort.entries.forEach { s -> chip(s.label, sort == s) { sort = s; rebuildChips(); render() } }
+        if (mode == Mode.FILES) {
+            val on = AutoClean.enabled(this)
+            chip("Auto-clean: ${if (on) "On" else "Off"}", on) { AutoClean.set(this, !on); rebuildChips(); scan() }
+        }
     }
 
     // ---- actions -------------------------------------------------------------------------------
@@ -195,7 +199,15 @@ class MainActivity : Activity() {
         Thread {
             val kept = Kept.all(this)
             val result = when (mode) {
-                Mode.FILES -> scanFiles().filter { it.file.path !in kept }
+                Mode.FILES -> {
+                    val files = scanFiles().filter { it.file.path !in kept }
+                    if (AutoClean.enabled(this)) {
+                        val (junk, rest) = files.partition { isJunk(it.file) }
+                        val freed = junk.filter { it.file.delete() }.sumOf { it.size }
+                        if (freed > 0) runOnUiThread { flash("Cleaned ${Formatter.formatFileSize(this, freed)} of junk!") }
+                        rest
+                    } else files
+                }
                 Mode.LEFTOVERS -> scanLeftovers(this).filter { it.file.path !in kept }
                 Mode.KEPT -> kept.map(::File).filter { it.exists() }.map(::entryOf)
             }

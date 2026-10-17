@@ -64,3 +64,22 @@ object Kept {
     fun remove(ctx: Context, path: String) = save(ctx, all(ctx) - path)
     fun clear(ctx: Context) = save(ctx, emptySet())
 }
+
+private val JUNK_DIRS = setOf(".thumbs", ".thumbnails", ".trash", ".shared", "whatsapp stickers", "whatsapp animated gifs", "stickers")
+private val JUNK_EXT = setOf("tmp", "temp", "thumb", "cache")
+
+/** Disposable files: WhatsApp thumbnails/stickers/trash, generic .thumbnails folders and temp files. */
+fun isJunk(f: File): Boolean {
+    val path = f.path.lowercase()
+    if (f.extension.lowercase() in JUNK_EXT) return true
+    val dirs = f.parentFile?.path.orEmpty().lowercase().split('/')
+    if (dirs.any { it == ".thumbnails" || it == ".trash" }) return true
+    return "whatsapp" in path && dirs.any { it in JUNK_DIRS }
+}
+
+/** Opt-in: delete junk automatically while scanning for swipe cards. */
+object AutoClean {
+    private fun prefs(ctx: Context) = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    fun enabled(ctx: Context) = prefs(ctx).getBoolean("autoclean", false)
+    fun set(ctx: Context, on: Boolean) = prefs(ctx).edit().putBoolean("autoclean", on).apply()
+}
