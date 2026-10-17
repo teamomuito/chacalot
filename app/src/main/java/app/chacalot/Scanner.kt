@@ -65,16 +65,19 @@ object Kept {
     fun clear(ctx: Context) = save(ctx, emptySet())
 }
 
-private val JUNK_DIRS = setOf(".thumbs", ".thumbnails", ".trash", ".shared", "whatsapp stickers", "whatsapp animated gifs", "stickers")
 private val JUNK_EXT = setOf("tmp", "temp", "thumb", "cache")
+private val JUNK_WORDS = listOf("thumb", "sticker", "cache", "temp", "trash", "animated gif", "backup")
 
-/** Disposable files: WhatsApp thumbnails/stickers/trash, generic .thumbnails folders and temp files. */
+/** Disposable files: WhatsApp thumbnails/stickers/hidden helper folders, .thumbnails folders and temp files. */
 fun isJunk(f: File): Boolean {
-    val path = f.path.lowercase()
     if (f.extension.lowercase() in JUNK_EXT) return true
     val dirs = f.parentFile?.path.orEmpty().lowercase().split('/')
     if (dirs.any { it == ".thumbnails" || it == ".trash" }) return true
-    return "whatsapp" in path && dirs.any { it in JUNK_DIRS }
+    if (dirs.none { "whatsapp" in it || it == "com.whatsapp" || it == "com.whatsapp.w4b" }) return false
+    val name = f.name.lowercase()
+    if (name.startsWith("stk-") || "thumb" in name) return true
+    // Hidden helper folders (.Thumbs, .Shared, ...) but never the user-visible .Statuses.
+    return dirs.any { d -> (d.startsWith(".") && d != ".statuses") || JUNK_WORDS.any { it in d } }
 }
 
 /** Opt-in: delete junk automatically while scanning for swipe cards. */
